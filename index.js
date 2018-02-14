@@ -4,6 +4,7 @@ const {
 } = require('stream');
 const os = require('os');
 const split = require('split');
+const GroupStream = require('./src/group');
 
 class Operation extends Transform {
   constructor(f) {
@@ -40,7 +41,10 @@ class Stream extends Transform {
   }
 
   map(f) {
-    this.prev = this.prev.pipe(new Operation(f));
+    this.prev = this.prev.pipe(new Operation(function(x) {
+      this.push(f(x));
+      this.next();
+    }));
     return this;
   }
 
@@ -71,7 +75,11 @@ class Stream extends Transform {
   }
 
   consume(out) {
-    this.prev.pipe(out);
+    if (typeof out === 'function') {
+      this.prev.on('data', out);
+    } else {
+      this.prev.pipe(out);
+    }
   }
 
   reduce(f) {
@@ -83,50 +91,37 @@ class Stream extends Transform {
   }
 
   throttle(time) {
+    let latest = Date.now();
     this.prev = this.prev.pipe(new Operation(function(x) {
-      setTimeout(() => {
+      if (Date.now() - latest > time) {
+        latest = Date.now();
         this.push(x);
-        this.next();
-      }, time);
-      return undefined;
+      }
+      this.next();
     }));
     return this;
   }
 
   groupBy(keys, override = false) {
-    const group = {};
-    this.prev = this.prev.pipe(new Transform({
-      objectMode: true,
-      transform: function(chunk, enc, next) {
-        let o = group;
-        let prevX;
-        for (let i = 0; i < keys.length; i += 1) {
-          let k = keys[i];
-          if (!chunk[k]) {
-            next();
-            break;
-          }
-          let x = chunk[k];
-          if (i + 1 < keys.length) {
-            if (!o[x]) {
-              o[x] = {};
-            }
-            o = o[x];
-          } else {
-            if (!o[x]) {
-              if (!override) o[x] = [];
-            }
-          }
-          prevX = x;
-        }
-        if (override) {
-          o[prevX] = chunk;
-        } else {
-          o[prevX].push(chunk);
-        }
-        this.push(group);
-        next();
+    return new GroupStream(this, keys, override);
+  }
+
+  // TODO Add support for forks
+  depth(n) {
+    this.prev = this.prev.pipe(new Operation(function(x) {
+      let i = n;
+      let o = x;
+      let keys = [];
+      while (i--) {
+        const k = Object.keys(o)[0];
+        keys.push(k);
+        o = o[k];
       }
+      this.push({
+        data: o,
+        keys
+      });
+      this.next();
     }));
     return this;
   }
