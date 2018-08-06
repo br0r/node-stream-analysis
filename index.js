@@ -9,7 +9,7 @@ const GroupStream = require('./src/group');
 class Operation extends Transform {
   constructor(f) {
     super({
-      objectMode: true
+      objectMode: true,
     });
     this.f = f;
   }
@@ -78,7 +78,7 @@ class Stream extends Transform {
     if (typeof out === 'function') {
       this.prev.on('data', out);
     } else {
-      this.prev.pipe(out);
+      return this.prev.pipe(out);
     }
   }
 
@@ -106,24 +106,28 @@ class Stream extends Transform {
     return new GroupStream(this, keys, override);
   }
 
-  // TODO Add support for forks
   depth(n) {
     this.prev = this.prev.pipe(new Operation(function(x) {
-      let i = n;
-      let o = x;
-      let keys = [];
-      while (i--) {
-        const k = Object.keys(o)[0];
-        keys.push(k);
-        o = o[k];
+      function fn(o, n, keys = []) {
+        if (!n) {
+          this.push({
+            data: o,
+            keys
+          });
+          return;
+        }
+        Object.keys(o).forEach(k => {
+          fn.call(this, o[k], n - 1, keys.concat(k));
+        });
       }
-      this.push({
-        data: o,
-        keys
-      });
+      fn.call(this, x, n);
       this.next();
     }));
     return this;
+  }
+
+  fork() {
+    return new Stream(this.prev);
   }
 
   _transform(chunk, enc, next) {
